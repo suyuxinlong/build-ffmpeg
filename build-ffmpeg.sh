@@ -57,6 +57,12 @@ detect_lib_path "x264"    "X264"    "fat-x264 x264-ios x264"
 detect_lib_path "x265"    "X265"    "fat-x265 x265-ios x265"
 detect_lib_path "fdk-aac" "FDK_AAC" "fdk-aac-ios fdk-aac fat-fdk-aac"
 detect_lib_path "dav1d"   "DAV1D"   "fat-dav1d dav1d-ios dav1d"
+detect_lib_path "lame"    "LAME"    "fat-lame lame-ios lame"
+detect_lib_path "opus"    "OPUS"    "fat-opus opus-ios opus"
+detect_lib_path "vpx"     "VPX"     "fat-vpx vpx-ios vpx"
+detect_lib_path "ogg"     "OGG"     "fat-ogg ogg-ios ogg"
+detect_lib_path "vorbis"  "VORBIS"  "fat-vorbis vorbis-ios vorbis"
+detect_lib_path "theora"  "THEORA"  "fat-theora theora-ios theora"
 
 # ====================
 # Configure 基础选项
@@ -80,6 +86,26 @@ fi
 
 if [ "$DAV1D" ]; then
     CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libdav1d"
+fi
+
+if [ "$LAME" ]; then
+    CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libmp3lame"
+fi
+
+if [ "$OPUS" ]; then
+    CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libopus"
+fi
+
+if [ "$VPX" ]; then
+    CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libvpx"
+fi
+
+if [ "$VORBIS" ]; then
+    CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libvorbis"
+fi
+
+if [ "$THEORA" ]; then
+    CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libtheora"
 fi
 
 # ====================
@@ -128,6 +154,12 @@ case "\$*" in
             *x265*)    echo "-I$X265/include" ;;
             *fdk-aac*) echo "-I$FDK_AAC/include" ;;
             *dav1d*)   echo "-I$DAV1D/include" ;;
+            *lame*)    echo "-I$LAME/include" ;;
+            *opus*)    echo "-I$OPUS/include/opus" ;;
+            *vpx*)     echo "-I$VPX/include" ;;
+            *ogg*)     echo "-I$OGG/include" ;;
+            *vorbis*)  echo "-I$VORBIS/include" ;;
+            *theora*)  echo "-I$THEORA/include" ;;
         esac
         exit 0
         ;;
@@ -137,6 +169,12 @@ case "\$*" in
             *x265*)    echo "-L$X265/lib -lx265 -lc++" ;;
             *fdk-aac*) echo "-L$FDK_AAC/lib -lfdk-aac" ;;
             *dav1d*)   echo "-L$DAV1D/lib -ldav1d" ;;
+            *lame*)    echo "-L$LAME/lib -lmp3lame" ;;
+            *opus*)    echo "-L$OPUS/lib -lopus" ;;
+            *vpx*)     echo "-L$VPX/lib -lvpx" ;;
+            *ogg*)     echo "-L$OGG/lib -logg" ;;
+            *vorbis*)  echo "-L$VORBIS/lib -lvorbis -lvorbisenc -lvorbisfile -L$OGG/lib -logg" ;;
+            *theora*)  echo "-L$THEORA/lib -ltheora -ltheoradec -ltheoraenc -L$OGG/lib -logg" ;;
         esac
         exit 0
         ;;
@@ -225,6 +263,90 @@ Libs: -L\${libdir} -ldav1d
 Cflags: -I\${includedir}
 EOF
         fi
+        if [ "$LAME" ]; then
+            cat > "$CWD/pkgconfig_temp/lame.pc" <<EOF
+prefix=$LAME
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+Name: lame
+Description: MP3 encoding library
+Version: 3.100
+Libs: -L\${libdir} -lmp3lame
+Cflags: -I\${includedir}
+EOF
+        fi
+        if [ "$OPUS" ]; then
+            cat > "$CWD/pkgconfig_temp/opus.pc" <<EOF
+prefix=$OPUS
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+Name: opus
+Description: Opus audio codec
+Version: 1.4
+Libs: -L\${libdir} -lopus
+Cflags: -I\${includedir}/opus
+EOF
+        fi
+        if [ "$VPX" ]; then
+            cat > "$CWD/pkgconfig_temp/vpx.pc" <<EOF
+prefix=$VPX
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+Name: vpx
+Description: VP8/VP9 video codec
+Version: 1.13.0
+Libs: -L\${libdir} -lvpx
+Cflags: -I\${includedir}
+EOF
+        fi
+        if [ "$OGG" ]; then
+            cat > "$CWD/pkgconfig_temp/ogg.pc" <<EOF
+prefix=$OGG
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+Name: ogg
+Description: ogg library
+Version: 1.3.5
+Libs: -L\${libdir} -logg
+Cflags: -I\${includedir}
+EOF
+        fi
+        if [ "$VORBIS" ]; then
+            cat > "$CWD/pkgconfig_temp/vorbis.pc" <<EOF
+prefix=$VORBIS
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+Name: vorbis
+Description: vorbis library
+Version: 1.3.7
+Requires: ogg
+Libs: -L\${libdir} -lvorbis -lvorbisenc -lvorbisfile
+Cflags: -I\${includedir}
+EOF
+            cp "$CWD/pkgconfig_temp/vorbis.pc" "$CWD/pkgconfig_temp/vorbisenc.pc"
+            cp "$CWD/pkgconfig_temp/vorbis.pc" "$CWD/pkgconfig_temp/vorbisfile.pc"
+        fi
+        if [ "$THEORA" ]; then
+            cat > "$CWD/pkgconfig_temp/theora.pc" <<EOF
+prefix=$THEORA
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+Name: theora
+Description: theora library
+Version: 1.1.1
+Requires: ogg
+Libs: -L\${libdir} -ltheora -ltheoradec -ltheoraenc
+Cflags: -I\${includedir}
+EOF
+            cp "$CWD/pkgconfig_temp/theora.pc" "$CWD/pkgconfig_temp/theoradec.pc"
+            cp "$CWD/pkgconfig_temp/theora.pc" "$CWD/pkgconfig_temp/theoraenc.pc"
+        fi
 
         mkdir -p "$SCRATCH/$ARCH"
         cd "$SCRATCH/$ARCH"
@@ -253,6 +375,48 @@ EOF
         # 针对 x265 增加 C++ 链接标志
         if [ "$X265" ]; then
             LDFLAGS="$LDFLAGS -lc++"
+        fi
+
+        # Manually add paths for libraries that might not use pkg-config or need explicit flags
+        if [ "$X264" ]; then
+            CFLAGS="$CFLAGS -I$X264/include"
+            LDFLAGS="$LDFLAGS -L$X264/lib"
+        fi
+        if [ "$X265" ]; then
+            CFLAGS="$CFLAGS -I$X265/include"
+            LDFLAGS="$LDFLAGS -L$X265/lib"
+        fi
+        if [ "$FDK_AAC" ]; then
+            CFLAGS="$CFLAGS -I$FDK_AAC/include"
+            LDFLAGS="$LDFLAGS -L$FDK_AAC/lib"
+        fi
+        if [ "$DAV1D" ]; then
+            CFLAGS="$CFLAGS -I$DAV1D/include"
+            LDFLAGS="$LDFLAGS -L$DAV1D/lib"
+        fi
+        if [ "$LAME" ]; then
+            CFLAGS="$CFLAGS -I$LAME/include"
+            LDFLAGS="$LDFLAGS -L$LAME/lib"
+        fi
+        if [ "$OPUS" ]; then
+            CFLAGS="$CFLAGS -I$OPUS/include/opus"
+            LDFLAGS="$LDFLAGS -L$OPUS/lib"
+        fi
+        if [ "$VPX" ]; then
+            CFLAGS="$CFLAGS -I$VPX/include"
+            LDFLAGS="$LDFLAGS -L$VPX/lib"
+        fi
+        if [ "$OGG" ]; then
+            CFLAGS="$CFLAGS -I$OGG/include"
+            LDFLAGS="$LDFLAGS -L$OGG/lib"
+        fi
+        if [ "$VORBIS" ]; then
+            CFLAGS="$CFLAGS -I$VORBIS/include"
+            LDFLAGS="$LDFLAGS -L$VORBIS/lib"
+        fi
+        if [ "$THEORA" ]; then
+            CFLAGS="$CFLAGS -I$THEORA/include"
+            LDFLAGS="$LDFLAGS -L$THEORA/lib"
         fi
 
         TMPDIR=${TMPDIR/%\/} $CWD/$SOURCE/configure \

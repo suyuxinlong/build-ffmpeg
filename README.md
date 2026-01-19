@@ -30,8 +30,12 @@ The integration of FFmpeg features follows the "dependencies first, core later" 
 # Similarly, if you need other libraries, execute the corresponding scripts first:
 ./build-x264.sh && ./build-fdk-aac.sh && ./build-dav1d.sh
 
+# New libraries support:
+./build-ogg.sh && ./build-vorbis.sh && ./build-theora.sh
+./build-opus.sh && ./build-lame.sh && ./build-vpx.sh
+
 # 2. Compile FFmpeg (Core Step)
-# The script will automatically scan and integrate compiled directories like fat-x264, fat-x265, etc.
+# The script will automatically scan and integrate compiled directories like fat-x264, fat-vpx, etc.
 ./build-ffmpeg.sh "arm64 x86_64"
 
 # 3. Package as a Framework (Recommended)
@@ -53,7 +57,8 @@ The tvOS version aims for ultimate stability and **does not integrate** third-pa
 ### 1. Import Framework
 *   Drag and drop the generated `FFmpeg.framework` into your Xcode project directory.
 *   In your target's **Build Phases** -> **Link Binary With Libraries**, ensure the Framework has been added.
-*   **Critical Setting**: In **General** -> **Frameworks, Libraries, and Embedded Content**, set the Embed option for `FFmpeg.framework` to **Do Not Embed** (since this is a Framework encapsulated from static libraries, embedding will cause signature errors).
+*   **No Extra Libraries Needed**: Since the Framework already includes symbols for all enabled third-party libraries (e.g., x264, LAME), you **do not need** to manually import those libraries' `.a` files.
+*   **Critical Setting**: In **General** -> **Frameworks, Libraries, and Embedded Content**, set the Embed option for `FFmpeg.framework` to **Do Not Embed**.
 
 ### 2. Add System Dependencies
 FFmpeg depends on the following iOS/macOS system libraries, which must be manually added to the **Link Binary With Libraries** list; otherwise, you will encounter `Undefined symbol` errors:
@@ -102,16 +107,24 @@ FFmpeg contains a large amount of assembly code optimized for specific CPUs, but
 ### 3. Modern Framework Encapsulation
 Traditional scripts usually only generate `.a` files. This project's `build-ffmpeg-iOS-framework.sh` script does more:
 
-*   **Libtool Merging**: Uses `libtool -static` instead of the traditional `ar` for more reliable symbol table handling.
-*   **Module Map**: Automatically generates a `module.modulemap` file, allowing direct use of `import FFmpeg` in Swift projects without the need for a cumbersome `Bridging-Header.h`.
-*   **Umbrella Header**: Automatically generates an `FFmpeg.h` umbrella header file to unify reference management.
+*   **All-in-One Binary**: Uses `libtool -static` to merge **all** compiled static libraries (including FFmpeg core and enabled third-party libraries like x264, LAME, etc.) into a single executable within the Framework. This means you don't need to link multiple `.a` files in your project.
+*   **Module Map**: Automatically generates a `module.modulemap` file, allowing direct use of `import FFmpeg` in Swift projects.
+*   **Umbrella Header**: Automatically generates an `FFmpeg.h` umbrella header file.
 
 ### 4. Special Handling for tvOS
-The tvOS SDK (`appletvos`) has stripped many system APIs (such as some CoreAudio functions) compared to iOS.
-*   **Targeted Disabling**: `build-ffmpeg-tvos.sh` explicitly disables `--disable-outdev=audiotoolbox` and `--disable-indev=avfoundation` to prevent link failures caused by calling non-existent APIs.
-*   **VideoToolbox Retention**: Although the system libraries are streamlined, the script carefully retains the `VideoToolbox` module, ensuring Apple TV 4K can utilize hardware decoding for H.264 and HEVC.
+The tvOS version is designed for maximum stability and follows a **minimalist principle**:
+*   **No Third-Party Libraries**: To avoid complex linker errors and potential App Store rejection due to restricted APIs, `build-ffmpeg-tvos.sh` does not integrate any third-party codecs (like x264/x265). It relies entirely on FFmpeg's built-in decoders and system-level hardware acceleration.
+*   **Targeted Pruning**: Explicitly disables `--disable-swscale-alpha` and other modules to ensure peak performance on the Apple TV platform.
 
----
+### 5. Modernizing Legacy Libraries (Theora/Vorbis/LAME)
+Many classic open-source libraries (such as libtheora and libvorbis) have aging build systems that cannot directly recognize the `arm64-apple-ios` architecture.
+*   **Automatic Patching**: `build-theora.sh` and `build-vorbis.sh` automatically detect and download the latest `config.guess` and `config.sub` from the official GNU repository. They also use `sed` to remove obsolete `-force_cpusubtype_ALL` linker flags, resolving errors with the modern Xcode linker.
+*   **Dependency Chain Management**: For the Ogg family, the scripts strictly follow the `libogg -> libvorbis/libtheora` order and automatically inject the correct header search paths during the `configure` phase.
+
+### 6. Special Target Mapping for libvpx
+libvpx (VP8/VP9) has its own independent configuration system.
+*   **Target Conversion**: The script automatically maps the iOS `arm64` and `x86_64` architectures to libvpx-specific `arm64-darwin20-gcc` and `x86_64-darwin20-gcc` targets.
+*   **High Bit Depth Support**: `--enable-vp9-highbitdepth` is enabled by default to support professional video playback requirements.
 
 ## ⚙️ Advanced Customization (Configuration)
 
@@ -171,7 +184,8 @@ CONFIGURE_FLAGS="--disable-everything \
 #### 💡 Size Reference Table (arm64 Architecture)
 | Configuration | Estimated Framework Size | Use Case |
 | :--- | :--- | :--- |
-| **Full Featured** (inc. x264/x265) | 80MB+ | Video editing, full-format players |
+| **Full Featured** (inc. x264/x265/VP9/AV1/Opus/LAME) | 100MB+ | Professional video editing, all-format players |
+| **General Media** (inc. x264/AAC/MP3/Opus) | 60MB - 80MB | Mainstream social/short video Apps |
 | **Playback Only** (no encoders/filters) | 40MB - 50MB | General short video, livestream Apps |
 | **HW-Accel Whitelist** | 12MB - 18MB | Minimalist player, H.264 monitoring |
 | **Single Arch (No x86_64)** | Reduces ~45% | Final App Store release version |
@@ -195,6 +209,9 @@ The script does not force dependency libraries to be in a specific path but uses
     *   **x265**: Looks for `fat-x265`, `x265-ios`, `x265`
     *   **fdk-aac**: Looks for `fdk-aac-ios`, `fdk-aac`, `fat-fdk-aac`
     *   **dav1d**: Looks for `fat-dav1d`, `dav1d-ios`, `dav1d`
+    *   **lame**: Looks for `fat-lame`, `lame-ios`
+    *   **vpx**: Looks for `fat-vpx`, `libvpx-ios`
+    *   **ogg/vorbis/theora**: Automatically looks for corresponding `fat-*` directories
 
 ### 2. Special Build Handling for Modules
 *   **x265 (CMake)**:
@@ -238,6 +255,12 @@ After executing all scripts, the directory structure is as follows:
 | **`build-x265.sh`** | Downloads and compiles x265 (HEVC/H.265) static libraries for iOS. Includes compatibility patches for modern CMake. |
 | **`build-fdk-aac.sh`** | Downloads and compiles the fdk-aac audio codec library for iOS. |
 | **`build-dav1d.sh`** | Downloads and compiles the dav1d (AV1) decoding library for iOS. |
+| **`build-lame.sh`** | Downloads and compiles the LAME (MP3 encoding) library for iOS. |
+| **`build-vpx.sh`** | Downloads and compiles the libvpx library, supporting VP8 and VP9 codecs. |
+| **`build-ogg.sh`** | Downloads and compiles the libogg base library, a prerequisite for Vorbis/Theora. |
+| **`build-vorbis.sh`** | Downloads and compiles the libvorbis (Ogg Vorbis audio) library. |
+| **`build-theora.sh`** | Downloads and compiles the libtheora (Ogg Theora video) library. |
+| **`build-opus.sh`** | Downloads and compiles the libopus (Opus low-latency audio) library. |
 | **`clean.sh`** | Cleanup script. Removes all build artifacts (thin, fat, scratch directories), temporary tools, and downloaded source packages. |
 
 ---

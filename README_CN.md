@@ -30,8 +30,12 @@ FFmpeg 的功能集成遵循“先依赖后核心”的原则。脚本会自动�
 # 同理，如果需要其他库，请先执行对应的脚本：
 ./build-x264.sh && ./build-fdk-aac.sh && ./build-dav1d.sh
 
+# 新增音视频库支持：
+./build-ogg.sh && ./build-vorbis.sh && ./build-theora.sh
+./build-opus.sh && ./build-lame.sh && ./build-vpx.sh
+
 # 2. 编译 FFmpeg (核心步骤)
-# 脚本会自动扫描并集成已编译好的 fat-x264, fat-x265 等目录
+# 脚本会自动扫描并集成已编译好的 fat-x264, fat-x265, fat-vpx 等目录
 ./build-ffmpeg.sh "arm64 x86_64"
 
 # 3. 打包为 Framework (推荐)
@@ -53,7 +57,8 @@ tvOS 版本追求极致的稳定性，默认**不集成**第三方库（避免�
 ### 1. 导入 Framework
 *   将生成的 `FFmpeg.framework` 拖入 Xcode 工程目录。
 *   在 target 的 **Build Phases** -> **Link Binary With Libraries** 中确保已添加该 Framework。
-*   **关键设置**: 在 **General** -> **Frameworks, Libraries, and Embedded Content** 中，将 `FFmpeg.framework` 的 Embed 选项设置为 **Do Not Embed** (因为这是静态库封装的 Framework，嵌入会导致签名错误)。
+*   **无需额外库**: 由于 Framework 已包含所有启用的第三方库（如 x264, LAME）的符号，您**不需要**再手动导入这些库的 `.a` 文件。
+*   **关键设置**: 在 **General** -> **Frameworks, Libraries, and Embedded Content** 中，将 `FFmpeg.framework` 的 Embed 选项设置为 **Do Not Embed**。
 
 ### 2. 添加系统依赖库
 FFmpeg 依赖以下 iOS/macOS 系统库，必须手动添加到 **Link Binary With Libraries** 列表中，否则会报错 `Undefined symbol`：
@@ -101,19 +106,27 @@ FFmpeg 包含了大量针对特定 CPU 优化的汇编代码，但这在 iOS Cla
 *   **VVC 模块屏蔽**: FFmpeg 7.1 引入的 VVC (H.266) 解码器包含大量新的 AArch64 汇编，目前与 iOS 交叉编译工具链存在兼容性问题。脚本通过 `--disable-vvc` 自动规避了此编译错误，确保整体构建成功。
 *   **Bitcode 支持**: 默认开启 `-fembed-bitcode` 标志，确保编译出的静态库包含 Bitcode 段（尽管 Xcode 14 已弃用，但为了兼容旧项目仍保留）。
 
-### 3. Framework 的现代化封装
+### 3. 现代化的 Framework 封装
 传统的脚本通常只生成 `.a` 文件。本项目的 `build-ffmpeg-iOS-framework.sh` 脚本做了更多工作：
 
-*   **Libtool 合并**: 使用 `libtool -static` 替代传统的 `ar`，更可靠地处理符号表。
-*   **Module Map**: 自动生成 `module.modulemap` 文件，使得在 Swift 项目中可以直接使用 `import FFmpeg`，而不需要繁琐的 `Bridging-Header.h`。
-*   **Umbrella Header**: 自动生成 `FFmpeg.h` 伞头文件，统一管理引用。
+*   **一体化二进制文件**: 使用 `libtool -static` 将**所有**编译好的静态库（包括 FFmpeg 核心和已启用的第三方库，如 x264、LAME 等）合并为 Framework 内的一个单一可执行文件。这意味着您无需在项目中链接多个 `.a` 文件。
+*   **Module Map**: 自动生成 `module.modulemap` 文件，允许在 Swift 项目中直接使用 `import FFmpeg`。
+*   **伞头文件 (Umbrella Header)**: 自动生成 `FFmpeg.h` 伞头文件。
 
 ### 4. tvOS 的特殊处理
-tvOS 的 SDK (`appletvos`) 相比 iOS 阉割了许多系统 API（如部分 CoreAudio 功能）。
-*   **针对性禁用**: `build-ffmpeg-tvos.sh` 显式禁用了 `--disable-outdev=audiotoolbox` 和 `--disable-indev=avfoundation`，防止因调用不存在的 API 而导致链接失败。
-*   **VideoToolbox 保留**: 尽管系统库精简，但脚本精心保留了 `VideoToolbox` 模块，确保 Apple TV 4K 可以利用硬件解码 H.264 和 HEVC。
+tvOS 版本旨在实现最大的稳定性，并遵循**极简原则**：
+*   **不集成第三方库**: 为了避免复杂的链接错误以及由于受限 API 可能导致的 App Store 被拒，`build-ffmpeg-tvos.sh` 不集成任何第三方编解码器（如 x264/x265）。它完全依赖 FFmpeg 的内置解码器和系统级硬件加速。
+*   **有针对性的裁剪**: 显式禁用 `--disable-swscale-alpha` 和其他模块，以确保在 Apple TV 平台上的最佳性能。
 
----
+### 5. 老旧库的现代环境适配 (Theora/Vorbis/LAME)
+许多经典的开源库（如 libtheora, libvorbis）其构建系统较为陈旧，无法直接识别 `arm64-apple-ios` 架构。
+*   **自动补丁**: `build-theora.sh` 和 `build-vorbis.sh` 会自动检测并从 GNU 官方下载最新的 `config.guess` 和 `config.sub`，并使用 `sed` 移除过时的 `-force_cpusubtype_ALL` 链接标志，解决了现代 Xcode 链接器报错的问题。
+*   **依赖链管理**: 针对 Ogg 家族，脚本严格遵循 `libogg -> libvorbis/libtheora` 的顺序，并自动在 `configure` 阶段注入正确的头文件搜索路径。
+
+### 6. libvpx 的特殊 Target 映射
+libvpx (VP8/VP9) 拥有自己独立的配置系统。
+*   **Target 转换**: 脚本自动将 iOS 的 `arm64` 和 `x86_64` 架构映射为 libvpx 特有的 `arm64-darwin20-gcc` 和 `x86_64-darwin20-gcc` 目标。
+*   **高位深支持**: 默认开启 `--enable-vp9-highbitdepth`，以支持更专业的视频回放需求。
 
 ## ⚙️ 高级自定义 (Configuration)
 
@@ -173,7 +186,8 @@ CONFIGURE_FLAGS="--disable-everything \
 #### 💡 体积参考表 (arm64 架构)
 | 配置方案 | 预计 Framework 体积 | 适用场景 |
 | :--- | :--- | :--- |
-| **全功能版** (含 x264/x265) | 80MB+ | 视频剪辑、全格式播放器 |
+| **全功能版** (含 x264/x265/VP9/AV1/Opus/LAME) | 100MB+ | 专业视频剪辑、全格式全能播放器 |
+| **通用音视频版** (含 x264/AAC/MP3/Opus) | 60MB - 80MB | 主流社交、短视频 App |
 | **仅播放版** (禁用编码/滤镜) | 40MB - 50MB | 通用短视频、直播 App |
 | **硬解白名单版** | 12MB - 18MB | 极简播放器、H.264 监控 |
 | **单架构 (无 x86_64)** | 减小约 45% | 最终 App Store 发布版本 |
@@ -197,6 +211,9 @@ CONFIGURE_FLAGS="--disable-everything \
     *   **x265**: 查找 `fat-x265`, `x265-ios`, `x265`
     *   **fdk-aac**: 查找 `fdk-aac-ios`, `fdk-aac`, `fat-fdk-aac`
     *   **dav1d**: 查找 `fat-dav1d`, `dav1d-ios`, `dav1d`
+    *   **lame**: 查找 `fat-lame`, `lame-ios`
+    *   **vpx**: 查找 `fat-vpx`, `libvpx-ios`
+    *   **ogg/vorbis/theora**: 自动查找对应的 `fat-*` 目录
 
 ### 2. 各模块的特殊构建处理
 *   **x265 (CMake)**:
@@ -240,6 +257,12 @@ CONFIGURE_FLAGS="--disable-everything \
 | **`build-x265.sh`** | 下载并编译适用于 iOS 的 x265 (HEVC/H.265) 静态库。包含对现代 CMake 的兼容性补丁。 |
 | **`build-fdk-aac.sh`** | 下载并编译适用于 iOS 的 fdk-aac 音频编解码库。 |
 | **`build-dav1d.sh`** | 下载并编译适用于 iOS 的 dav1d (AV1) 解码库。 |
+| **`build-lame.sh`** | 下载并编译适用于 iOS 的 LAME (MP3 编码) 库。 |
+| **`build-vpx.sh`** | 下载并编译 libvpx 库，支持 VP8 和 VP9 编解码。 |
+| **`build-ogg.sh`** | 下载并编译 libogg 基础库，是 Vorbis/Theora 的前提。 |
+| **`build-vorbis.sh`** | 下载并编译 libvorbis (Ogg Vorbis 音频) 库。 |
+| **`build-theora.sh`** | 下载并编译 libtheora (Ogg Theora 视频) 库。 |
+| **`build-opus.sh`** | 下载并编译 libopus (Opus 低延迟音频) 库。 |
 | **`clean.sh`** | 一键清理脚本。删除所有编译产物（thin, fat, scratch 目录）、临时工具及下载的源码包。 |
 
 ---
