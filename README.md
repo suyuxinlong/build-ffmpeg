@@ -1,298 +1,266 @@
-# FFmpeg iOS & tvOS Build System (FFmpeg 7.1)
+# FFmpeg Cross-Platform Build System (iOS, macOS, tvOS, Android) - FFmpeg 7.1 Technical Manual
 
 [中文版](README_CN.md)
 
-> **Acknowledgement**: This project is based on and improved from [kewlbear/FFmpeg-iOS-build-script](https://github.com/kewlbear/FFmpeg-iOS-build-script).
+> **Acknowledgement**: This project is based on and improved from [kewlbear/FFmpeg-iOS-build-script](https://github.com/kewlbear/FFmpeg-iOS-build-script), deeply adapted and refactored for modern Xcode, Apple Silicon, and FFmpeg 7.0+.
 
-This is a collection of highly automated shell scripts designed to solve various dependency hells, architecture merging, and assembly compatibility issues when cross-compiling FFmpeg for iOS and tvOS on macOS.
+This is an enterprise-level collection of shell scripts designed to solve the complexity of cross-compiling FFmpeg for iOS, tvOS, macOS, and Android on macOS. It is not just a compilation script, but a complete solution for **dependency management** and **artifact packaging**.
 
-This project is based on the **FFmpeg 7.1** core, integrating mainstream codec libraries, and provides a one-click build solution for generating `XCFramework`-style (though standard Framework structure) packages, perfectly supporting Swift and Objective-C projects.
+Based on the **FFmpeg 7.1** core, this project integrates mainstream codec libraries such as x264, x265, fdk-aac, dav1d, lame, opus, vpx, vorbis, and theora, and provides the ability to generate a `Framework` with one click, perfectly supporting Swift and Objective-C projects.
 
 ---
 
-## 🚀 Quick Start
+## 📚 Table of Contents
 
-### 1. Environment Dependencies
-Ensure that the necessary basic tools for compilation are installed:
-```bash
-brew install yasm nasm cmake
+1.  [System Architecture & Workflow](#-system-architecture--workflow)
+2.  [Environment Setup](#-environment-setup)
+3.  [Build Guide](#-build-guide)
+    *   [iOS (iPhone/iPad)](#ios-iphoneipad)
+    *   [macOS (Apple Silicon/Intel)](#macos-apple-siliconintel)
+    *   [tvOS (Apple TV)](#tvos-apple-tv)
+    *   [Android](#android)
+4.  [Integration Guide](#-integration-guide)
+    *   [Xcode Integration Steps](#xcode-integration-steps)
+    *   [Fixing Common Linker Errors](#fixing-common-linker-errors)
+5.  [Configuration & Customization](#-configuration--customization)
+    *   [FFmpeg Version & Architecture](#ffmpeg-version--architecture)
+    *   [Slimming Down (Size Reduction)](#slimming-down-size-reduction)
+    *   [Key Configure Flags](#key-configure-flags)
+6.  [Script Reference](#-script-reference)
+7.  [Licensing & Compliance](#-licensing--compliance)
+
+---
+
+## 🏗 System Architecture & Workflow
+
+This build system adopts a **modular design**, following the workflow of "Compile dependencies first, then compile the core, and finally package".
+
+```mermaid
+graph TD
+    subgraph "Phase 1: Dependencies Build"
+        A[Dependency Source<br/>x264/lame/...] -->|build-xxx.sh| B(Single Arch Lib<br/>thin/arm64/libxxx.a)
+        B -->|lipo| C(Universal Static Lib<br/>fat-xxx/lib/libxxx.a)
+    end
+
+    subgraph "Phase 2: FFmpeg Core Build"
+        D[FFmpeg Source<br/>ffmpeg-7.1]
+        E[Fake pkg-config<br/>tools_bin/] -->|Path Injection| D
+        C -->|pkg-config discovery| D
+        D -->|build-ffmpeg.sh| F(FFmpeg Single Arch Lib<br/>thin/arm64/libavcodec.a)
+        F -->|lipo| G(FFmpeg Universal Lib<br/>FFmpeg-iOS/lib/...)
+    end
+
+    subgraph "Phase 3: Packaging"
+        G -->|build-ffmpeg-iOS-framework.sh| H{Final Artifact<br/>FFmpeg.framework}
+        C -->|libtool static merge| H
+    end
+
+    style H fill:#f96,stroke:#333,stroke-width:2px
 ```
-*Note: The script will automatically handle `gas-preprocessor.pl`, so manual installation is not required.*
 
-### 2. Build iOS Version (Includes x264/hevc, etc.)
-The integration of FFmpeg features follows the "dependencies first, core later" principle. The script automatically detects the outputs of dependency libraries in the same directory. Therefore, if you need specific library support, you **must** complete the compilation of the corresponding library before running `build-ffmpeg.sh`.
+---
+
+## 🛠 Environment Setup
+
+Before starting, ensure your macOS development environment is complete.
+
+### 1. Xcode & Command Line Tools
+Ensure you have the latest version of Xcode installed, and execute the following command to install the command line tools:
+```bash
+xcode-select --install
+```
+
+### 2. Build Tools (Homebrew)
+FFmpeg and its dependency libraries require a series of build tools. Please use Homebrew to install them:
 
 ```bash
-# 1. Compile the dependency libraries you need (Execute as needed)
-# For example, if you need x265, you must run:
-./build-x265.sh
+# Basic compilation tools
+brew install yasm nasm cmake pkg-config
 
-# Similarly, if you need other libraries, execute the corresponding scripts first:
-./build-x264.sh && ./build-fdk-aac.sh && ./build-dav1d.sh
+# Build systems for specific third-party libraries
+brew install meson ninja      # For dav1d
+brew install autoconf automake libtool # For fdk-aac, lame, etc.
+```
 
-# New libraries support:
-./build-ogg.sh && ./build-vorbis.sh && ./build-theora.sh
-./build-opus.sh && ./build-lame.sh && ./build-vpx.sh
+*   **yasm/nasm**: Assembly compilers, crucial for x264/x265 performance.
+*   **cmake/meson**: Build systems commonly used in modern C++ projects.
+*   **pkg-config**: Dependency management tool, core to this script for discovering compiled libraries.
+*   **gas-preprocessor.pl**: (The script downloads this automatically) Used to convert GNU assembly syntax to Apple Clang compatible syntax.
 
-# 2. Compile FFmpeg (Core Step)
-# The script will automatically scan and integrate compiled directories like fat-x264, fat-vpx, etc.
-./build-ffmpeg.sh "arm64 x86_64"
+---
 
-# 3. Package as a Framework (Recommended)
+## 🚀 Build Guide
+
+### iOS (iPhone/iPad)
+
+The iOS build is the most complex as it usually involves the most third-party libraries.
+
+#### Step 1: Compile Dependency Libraries (Optional)
+The scripts are designed to be **loosely coupled**. If you don't need a library (e.g., you don't need x265), simply skip the corresponding script. `build-ffmpeg.sh` automatically detects which libraries have been compiled.
+
+Recommended build order:
+```bash
+# 1. Basic Codecs
+./build-x264.sh        # H.264 (GPL)
+./build-fdk-aac.sh     # AAC (Non-Free)
+./build-lame.sh        # MP3
+
+# 2. Advanced Codecs (On demand)
+./build-x265.sh        # H.265 (GPL, takes longer to compile)
+./build-dav1d.sh       # AV1 Decoding
+./build-opus.sh        # Opus Audio
+./build-vpx.sh         # VP8/VP9
+
+# 3. Ogg Ecosystem (Must follow order)
+./build-ogg.sh         # Base layer
+./build-vorbis.sh      # Depends on Ogg
+./build-theora.sh      # Depends on Ogg
+```
+
+#### Step 2: Compile FFmpeg Core
+```bash
+./build-ffmpeg.sh
+```
+This step performs the following:
+1.  Downloads FFmpeg 7.1 source code.
+2.  Scans for `fat-*` folders in the current directory.
+3.  Configures `pkg-config` paths to inject third-party libraries into the FFmpeg build configuration.
+4.  Compiles for `arm64` (Device) and `x86_64` (Simulator) separately.
+5.  Uses `lipo` to merge and generate the `FFmpeg-iOS` directory.
+
+#### Step 3: Package Framework
+```bash
 ./build-ffmpeg-iOS-framework.sh
 ```
-> **Output**: `FFmpeg.framework` (Contains arm64 device + x86_64 simulator)
+This script is extremely important. It merges **all** compiled static libraries (including libx264.a, libmp3lame.a, etc.) into a single binary file within `FFmpeg.framework`. This means you **do not need** to manually add dozens of `.a` files to Xcode.
 
-### 3. Build tvOS Version
-The tvOS version aims for ultimate stability and **does not integrate** third-party libraries by default (to avoid complex cross-compilation errors), but it fully retains hardware decoding support.
+### macOS (Apple Silicon/Intel)
+```bash
+./build-ffmpeg-macos.sh
+```
+*   **Features**: Enables `VideoToolbox` (hardware acceleration) and `AudioToolbox`.
+*   **Architecture**: Includes `arm64` and `x86_64`. The generated Framework can be used directly for macOS App development.
+
+### tvOS (Apple TV)
 ```bash
 ./build-ffmpeg-tvos.sh
 ```
-> **Output**: `FFmpeg-tvOS.framework` (Contains arm64 device + x86_64 simulator)
+*   **Strategy**: tvOS App Store reviews are strict, and device performance is uniform. The script **does not integrate** third-party libraries by default to ensure maximum stability and pass review. It relies solely on FFmpeg's built-in software decoding and VideoToolbox hardware decoding.
+
+### Android
+```bash
+# Set NDK path first
+export ANDROID_NDK_HOME=/path/to/ndk
+./build-ffmpeg-android.sh
+```
+*   **Artifacts**: `.so` dynamic libraries under `FFmpeg-Android/jniLibs/`.
+*   **Architectures**: `arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`.
 
 ---
 
-## 📦 Integration into Xcode Project
+## 🔌 Integration Guide
 
-### 1. Import Framework
-*   Drag and drop the generated `FFmpeg.framework` into your Xcode project directory.
-*   In your target's **Build Phases** -> **Link Binary With Libraries**, ensure the Framework has been added.
-*   **No Extra Libraries Needed**: Since the Framework already includes symbols for all enabled third-party libraries (e.g., x264, LAME), you **do not need** to manually import those libraries' `.a` files.
-*   **Critical Setting**: In **General** -> **Frameworks, Libraries, and Embedded Content**, set the Embed option for `FFmpeg.framework` to **Do Not Embed**.
+### Xcode Integration Steps
 
-### 2. Add System Dependencies
-FFmpeg depends on the following iOS/macOS system libraries, which must be manually added to the **Link Binary With Libraries** list; otherwise, you will encounter `Undefined symbol` errors:
-*   `libz.tbd` (Zlib compression support)
-*   `libbz2.tbd` (Bzip2 compression support)
-*   `libiconv.tbd` (Character set conversion)
-*   `AudioToolbox.framework` (Audio processing)
-*   `VideoToolbox.framework` (Hardware decoding support)
-*   `CoreMedia.framework` (Basic media types)
-*   `AVFoundation.framework` (Audio/Video foundation framework)
-*   *(If compiling on older Xcode versions)* `libc++.tbd`
+1.  **Import Framework**: Drag `FFmpeg.framework` into your project.
+2.  **Set Embed**: In **General** -> **Frameworks, Libraries, and Embedded Content**, set it to **Do Not Embed** (since it is a static library framework).
+3.  **Add System Libraries**: Add the following system libraries in **Build Phases** -> **Link Binary With Libraries**, otherwise you will get `Undefined symbol` errors:
+    *   `libz.tbd` (Compression)
+    *   `libbz2.tbd` (Compression)
+    *   `libiconv.tbd` (Character encoding)
+    *   `AudioToolbox.framework` (Audio processing)
+    *   `VideoToolbox.framework` (Hardware decoding)
+    *   `CoreMedia.framework`
+    *   `AVFoundation.framework`
+    *   `libc++.tbd` (If you integrated C++ libraries like x265/dav1d)
 
-### 3. Header References
-It is recommended to set **Header Search Paths** for easier header referencing:
-1.  In **Build Settings** -> **Search Paths** -> **Header Search Paths**, add:
-    `$(PROJECT_DIR)/FFmpeg.framework/Headers`
-2.  Reference in code:
-    ```c
-    #include "libavcodec/avcodec.h"
-    #include "libavformat/avformat.h"
-    // Or (if using Modules)
-    // @import FFmpeg;
+4.  **Header Search Paths**:
+    In **Build Settings**, find **Header Search Paths** and add:
+    ```text
+    $(PROJECT_DIR)/FFmpeg.framework/Headers
     ```
+    Now you can use `#include "libavcodec/avcodec.h"`.
+
+### Fixing Common Linker Errors
+
+*   **Error**: `Undefined symbol: _VTDecompressionSessionCreate`
+    *   **Fix**: Missing `VideoToolbox.framework`.
+*   **Error**: `Undefined symbol: _inflate`
+    *   **Fix**: Missing `libz.tbd`.
+*   **Error**: `Undefined symbol: operator new(unsigned long)`
+    *   **Fix**: Missing `libc++.tbd` (Usually because x265 or dav1d is written in C++).
 
 ---
 
-## 🔬 Core Technical Implementation Principles (Technical Deep Dive)
+## ⚙️ Configuration & Customization
 
-This set of scripts is not just a simple call to `configure` and `make`. It includes a series of "black magic" fixes and optimizations for the iOS/tvOS compilation environment.
+All customizations are done by modifying variables at the top of the scripts.
 
-### 1. Intelligent Dependency Injection (`pkg-config` Hijacking Technology)
-The FFmpeg build system relies heavily on `pkg-config` to find third-party libraries (such as x264, x265). In a cross-compilation environment, getting FFmpeg to correctly find the iOS static libraries we just compiled (rather than the macOS libraries installed on the system) is a major pain point.
-
-**Script Solution (`build-ffmpeg.sh`):**
-*   **Virtual Environment**: The script dynamically creates a fake `pkg-config` script in the `tools_bin/` directory.
-*   **Path Redirection**: When FFmpeg requests the path for `x264`, this fake script intercepts the request and forcibly returns the header file and library paths from our local `fat-x264/` directory.
-*   **Advantage**: This completely solves the `Package xxxxx was not found` problem without polluting the system's environment variables.
-
-### 2. Assembly Code Compatibility Handling (Assembly & Bitcode)
-FFmpeg contains a large amount of assembly code optimized for specific CPUs, but this often throws errors on the iOS Clang compiler.
-
-*   **Gas-Preprocessor**: The script automatically detects and downloads `gas-preprocessor.pl`, a Perl script used to convert GNU Assembler (GAS) syntax into Apple Clang compatible syntax.
-*   **VVC Module Masking**: The VVC (H.266) decoder introduced in FFmpeg 7.1 contains a large amount of new AArch64 assembly, which currently has compatibility issues with the iOS cross-compilation toolchain. The script automatically avoids this compilation error via `--disable-vvc`, ensuring the overall build succeeds.
-*   **Bitcode Support**: The `-fembed-bitcode` flag is enabled by default, ensuring the compiled static libraries contain Bitcode segments (although Xcode 14+ has deprecated it, it is kept for compatibility with older projects).
-
-### 3. Modern Framework Encapsulation
-Traditional scripts usually only generate `.a` files. This project's `build-ffmpeg-iOS-framework.sh` script does more:
-
-*   **All-in-One Binary**: Uses `libtool -static` to merge **all** compiled static libraries (including FFmpeg core and enabled third-party libraries like x264, LAME, etc.) into a single executable within the Framework. This means you don't need to link multiple `.a` files in your project.
-*   **Module Map**: Automatically generates a `module.modulemap` file, allowing direct use of `import FFmpeg` in Swift projects.
-*   **Umbrella Header**: Automatically generates an `FFmpeg.h` umbrella header file.
-
-### 4. Special Handling for tvOS
-The tvOS version is designed for maximum stability and follows a **minimalist principle**:
-*   **No Third-Party Libraries**: To avoid complex linker errors and potential App Store rejection due to restricted APIs, `build-ffmpeg-tvos.sh` does not integrate any third-party codecs (like x264/x265). It relies entirely on FFmpeg's built-in decoders and system-level hardware acceleration.
-*   **Targeted Pruning**: Explicitly disables `--disable-swscale-alpha` and other modules to ensure peak performance on the Apple TV platform.
-
-### 5. Modernizing Legacy Libraries (Theora/Vorbis/LAME)
-Many classic open-source libraries (such as libtheora and libvorbis) have aging build systems that cannot directly recognize the `arm64-apple-ios` architecture.
-*   **Automatic Patching**: `build-theora.sh` and `build-vorbis.sh` automatically detect and download the latest `config.guess` and `config.sub` from the official GNU repository. They also use `sed` to remove obsolete `-force_cpusubtype_ALL` linker flags, resolving errors with the modern Xcode linker.
-*   **Dependency Chain Management**: For the Ogg family, the scripts strictly follow the `libogg -> libvorbis/libtheora` order and automatically inject the correct header search paths during the `configure` phase.
-
-### 6. Special Target Mapping for libvpx
-libvpx (VP8/VP9) has its own independent configuration system.
-*   **Target Conversion**: The script automatically maps the iOS `arm64` and `x86_64` architectures to libvpx-specific `arm64-darwin20-gcc` and `x86_64-darwin20-gcc` targets.
-*   **High Bit Depth Support**: `--enable-vp9-highbitdepth` is enabled by default to support professional video playback requirements.
-
-## ⚙️ Advanced Customization (Configuration)
-
-You can customize the build behavior by modifying the variables at the top of the scripts.
-
-### Modify FFmpeg Version
-In `build-ffmpeg.sh` or `build-ffmpeg-tvos.sh`:
+### FFmpeg Version & Architecture
+In `build-ffmpeg.sh`:
 ```bash
-FF_VERSION="7.1"  # Change to the version you need, e.g., "6.1"
-```
-*Note: If you change the version, you may need to manually check if new features like VVC need to be disabled.*
-
-### Modify Supported Architectures
-If you only need the device version (to reduce package size), you can modify the script:
-```bash
-ARCHS="arm64" # Remove x86_64
+FF_VERSION="7.1"       # Change version
+ARCHS="arm64 x86_64"   # Change architectures (e.g., remove x86_64 for device-only build)
 ```
 
-### Prune FFmpeg Modules
-FFmpeg enables a large number of rare codecs by default, which leads to a larger Framework size (usually between 50MB-100MB). You can significantly reduce the size by modifying the `CONFIGURE_FLAGS` variable.
+### Slimming Down (Size Reduction)
+FFmpeg includes a lot of redundant features by default. Modifying `CONFIGURE_FLAGS` can significantly reduce the size.
 
-**Strategy A: Disable Encoders and Muxers (Recommended, reduces size by ~40%)**
-Most Apps only need playback (decoding) and do not need recording or transcoding (encoding). Disabling all encoders and muxers is the simplest and lowest-risk way to slim down:
+**Strategy A: Standard Player (Recommended)**
+Disable encoders (playback only), disable muxers (demuxing only).
 ```bash
 CONFIGURE_FLAGS="... --disable-encoders --disable-muxers"
 ```
 
-**Strategy B: Disable Unnecessary Filters**
-If you don't involve complex video post-processing (like watermarks or cropping), you can disable the bulky filter system and only keep the necessary pixel format conversion functions:
-```bash
-CONFIGURE_FLAGS="... --disable-filters --enable-filter=scale,format,null"
-```
-
-**Strategy C: "Minimalism" with External Libraries**
-Third-party libraries are powerful but come with a significant size cost. Weigh the options before integration:
-*   **x265 (HEVC Encoding)**: Adds about 5MB-8MB. If you only play H.265, use the system hardware decoder instead.
-*   **dav1d (AV1 Decoding)**: Adds about 3MB-5MB. AV1 is a future trend, but hardware decoding is not yet universal on mobile.
-*   **fdk-aac**: Adds about 1MB. Good quality but has licensing risks; usually, the system's built-in AAC decoding is sufficient.
-
-**Strategy D: Enable Link-Time Optimization (LTO)**
-Add `--enable-lto` to `CONFIGURE_FLAGS`. The compiler will perform global optimizations during the linking stage, removing redundant code that is unused across files.
-*Note: Enabling LTO significantly increases compilation time but can further compress the binary size by 5%-10%.*
-
-**Strategy E: Minimalist Whitelist Mode (Extreme Slimming, Size < 15MB)**
-Adopts a "disable everything first, then enable as needed" strategy.
-Below is an example configuration for H.264/H.265/AAC hardware-accelerated playback only:
+**Strategy B: Extreme Slimming (Monitoring/Live Stream)**
+Disable everything, enable only H.264/HEVC and AAC.
 ```bash
 CONFIGURE_FLAGS="--disable-everything \
                  --enable-decoder=h264,hevc,aac \
-                 --enable-demuxer=mov,m4v,mp4 \
-                 --enable-parser=h264,hevc,aac \
-                 --enable-protocol=file,http,https,tls,tcp \
-                 --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox \
-                 --enable-filter=scale,format,null"
+                 --enable-demuxer=mov,flv,hls \
+                 --enable-protocol=file,http,https,tcp,rtmp"
 ```
 
-#### 💡 Size Reference Table (arm64 Architecture)
-| Configuration | Estimated Framework Size | Use Case |
+### Key Configure Flags
+
+| Flag | Function | Recommendation | 
 | :--- | :--- | :--- |
-| **Full Featured** (inc. x264/x265/VP9/AV1/Opus/LAME) | 100MB+ | Professional video editing, all-format players |
-| **General Media** (inc. x264/AAC/MP3/Opus) | 60MB - 80MB | Mainstream social/short video Apps |
-| **Playback Only** (no encoders/filters) | 40MB - 50MB | General short video, livestream Apps |
-| **HW-Accel Whitelist** | 12MB - 18MB | Minimalist player, H.264 monitoring |
-| **Single Arch (No x86_64)** | Reduces ~45% | Final App Store release version |
+| `--enable-cross-compile` | Enables cross-compilation mode | **Must** |
+| `--enable-pic` | Generates Position Independent Code | **Must** (Otherwise cannot link to dynamic libs or Apps) |
+| `--disable-debug` | Disables debug symbols | Recommended to reduce size |
+| `--disable-programs` | Do not compile ffmpeg/ffprobe CLI tools | **Must** (CLI tools cannot run on iOS) |
+| `--enable-videotoolbox` | Enables iOS/macOS hardware acceleration | **Highly Recommended** |
+| `--disable-vvc` | Disables H.266 (VVC) | **Recommended** (VVC assembly in 7.1 currently has compatibility issues on iOS) |
+| `--enable-lto` | Enables Link Time Optimization | Optional (Slower compile, smaller binary) |
 
 ---
 
-## 🔧 Dependency Management & Build Internals
+## 📜 Script Reference
 
-To achieve "out-of-the-box" functionality and avoid common cross-compilation pitfalls, the scripts include a set of intelligent dependency searching and build repair mechanisms.
-
-### 1. Automatic Dependency Detection (`build-ffmpeg.sh`)
-The script does not force dependency libraries to be in a specific path but uses a dynamic scanning mechanism. When running `build-ffmpeg.sh`:
-1.  **Environment Variable Priority**: If you want to use a library you compiled yourself, you can override it by setting environment variables.
-    ```bash
-    # Example: Forcing the use of x264 from a specific path
-    export X264="/Users/dev/my-custom-x264"
-    ./build-ffmpeg.sh
-    ```
-2.  **Automatic Directory Scanning**: If no environment variables are set, the script automatically searches for standard-named folders in the **current directory** (`.`) and the **parent directory** (`..`):
-    *   **x264**: Looks for `fat-x264`, `x264-ios`, `x264`
-    *   **x265**: Looks for `fat-x265`, `x265-ios`, `x265`
-    *   **fdk-aac**: Looks for `fdk-aac-ios`, `fdk-aac`, `fat-fdk-aac`
-    *   **dav1d**: Looks for `fat-dav1d`, `dav1d-ios`, `dav1d`
-    *   **lame**: Looks for `fat-lame`, `lame-ios`
-    *   **vpx**: Looks for `fat-vpx`, `libvpx-ios`
-    *   **ogg/vorbis/theora**: Automatically looks for corresponding `fat-*` directories
-
-### 2. Special Build Handling for Modules
-*   **x265 (CMake)**:
-    *   **Automatic Patching**: `build-x265.sh` automatically modifies `CMakeLists.txt` in the source code to remove outdated policy settings (CMP0025, CMP0054) and upgrade minimum version requirements, fixing configuration errors in modern CMake environments.
-    *   **Disabling Assembly**: Forcibly sets `-DENABLE_ASSEMBLY=OFF` for the iOS platform, solving some missing linker symbol issues.
-*   **dav1d (Meson/Ninja)**:
-    *   **Dynamic Cross-files**: `build-dav1d.sh` generates the `cross-file` required by Meson (e.g., `dav1d-cross-arm64.txt`) in real-time based on the current Xcode SDK path, ensuring that compiler and linker flags match perfectly.
-*   **x264**:
-    *   **Simulator Compatibility**: When compiling the `x86_64` (simulator) version, the script automatically adds `--disable-asm`. This is to avoid relocation errors that old x264 assembly code might produce under newer macOS linkers, while the device (`arm64`) version still retains assembly optimization.
-*   **FFmpeg VVC (H.266)**:
-    *   **Temporary Masking**: Since the new VVC decoder in FFmpeg 7.1 contains a large amount of AArch64 assembly that is not yet fully adapted to the iOS toolchain, `build-ffmpeg.sh` disables it by default via `--disable-decoder=vvc` to ensure overall build success.
-
----
-
-## 📂 Directory Structure
-
-After executing all scripts, the directory structure is as follows:
-
-```text
-├── FFmpeg.framework/        # [Final Output] iOS Framework
-├── FFmpeg-tvOS.framework/   # [Final Output] tvOS Framework
-├── FFmpeg-iOS/              # iOS original static libraries and headers
-├── fat-x264/                # x264 universal static library
-├── fat-x265/                # x265 universal static library
-├── tools_bin/               # Temporary compilation tools (gas-preprocessor, pkg-config)
-├── thin/                    # Intermediate artifacts for single architectures (arm64, x86_64 separated)
-├── scratch/                 # Temporary object files during compilation (can be deleted anytime)
-└── build-*.sh               # Build scripts
-```
-
----
-
-## 📜 Script Descriptions
-
-| Script Name | Description |
+| Script | Core Function & Tech Points | 
 | :--- | :--- |
-| **`build-ffmpeg.sh`** | **Core Script**. Handles FFmpeg source download, multi-arch cross-compilation, and automatic integration of x264/x265/aac/dav1d libraries. |
-| **`build-ffmpeg-iOS-framework.sh`** | Packages the `.a` static libraries generated by `build-ffmpeg.sh` into a standard iOS `.framework`, generating Module Map and Umbrella Header. |
-| **`build-ffmpeg-tvos.sh`** | Compilation script specifically for Apple TV (tvOS), disabling incompatible APIs and maintaining a lightweight build. |
-| **`build-x264.sh`** | Downloads and compiles x264 (H.264) static libraries for iOS. |
-| **`build-x265.sh`** | Downloads and compiles x265 (HEVC/H.265) static libraries for iOS. Includes compatibility patches for modern CMake. |
-| **`build-fdk-aac.sh`** | Downloads and compiles the fdk-aac audio codec library for iOS. |
-| **`build-dav1d.sh`** | Downloads and compiles the dav1d (AV1) decoding library for iOS. |
-| **`build-lame.sh`** | Downloads and compiles the LAME (MP3 encoding) library for iOS. |
-| **`build-vpx.sh`** | Downloads and compiles the libvpx library, supporting VP8 and VP9 codecs. |
-| **`build-ogg.sh`** | Downloads and compiles the libogg base library, a prerequisite for Vorbis/Theora. |
-| **`build-vorbis.sh`** | Downloads and compiles the libvorbis (Ogg Vorbis audio) library. |
-| **`build-theora.sh`** | Downloads and compiles the libtheora (Ogg Theora video) library. |
-| **`build-opus.sh`** | Downloads and compiles the libopus (Opus low-latency audio) library. |
-| **`clean.sh`** | Cleanup script. Removes all build artifacts (thin, fat, scratch directories), temporary tools, and downloaded source packages. |
+| **build-ffmpeg.sh** | **[Core]** Dynamically generates pkg-config env vars; calls configure with iOS SDK path; handles gas-preprocessor. |
+| **build-x264.sh** | Automatically disables assembly optimization for simulator architectures to avoid relocation errors. |
+| **build-x265.sh** | **[Hard]** Automatically patches `CMakeLists.txt` to fix policy errors; uses `-DENABLE_ASSEMBLY=OFF` to solve missing symbols. |
+| **build-dav1d.sh** | **[Hard]** Dynamically generates Meson `cross-file` to precisely inject iOS SDK path and deployment target. |
+| **build-theora.sh** | Automatically downloads latest `config.guess` to recognize arm64 architecture. |
+| **build-ffmpeg-iOS-framework.sh** | Uses `libtool -static` for **full merge**; generates Swift-friendly `module.modulemap`. |
 
 ---
 
-## ⚠️ Common Issues Troubleshooting
+## ⚖️ Licensing & Compliance
 
-1.  **Symbol not found: _xxx**
-    *   If you encounter linking errors at runtime, check if the Xcode `Link Binary With Libraries` has added the necessary system libraries: `libc++.tbd`, `libz.tbd`, `libiconv.tbd`, `VideoToolbox`, `AudioToolbox`.
+**Extremely Important**: The license of FFmpeg depends on the modules you enable. Please consult legal counsel before commercial use.
 
-2.  **Xcode cannot index header files**
-    *   Ensure the path where the Framework is located does not contain spaces or special characters.
-    *   Add `$(PROJECT_DIR)/FFmpeg.framework/Headers` to `Header Search Paths`.
+| Enabled Lib | Modules Included | Final License | Commercial Restrictions | 
+| :--- | :--- | :--- | :--- |
+| **Default** | FFmpeg Core Only | **LGPL v2.1+** | Allowed to link and use, must declare use of FFmpeg in About page. |
+| **+ x264/x265** | GPL Modules | **GPL v2+** | **Viral**: Your App must be open source, otherwise it cannot be listed on App Store (violates GPL). |
+| **+ fdk-aac** | Non-Free | **Non-Free** | **Incompatible with GPL**. Not distributable unless you have a commercial license from Fraunhofer. |
 
-3.  **App Store Upload Warning (Simulator Architecture)**
-    *   The generated Framework contains the `x86_64` simulator architecture. When archiving and uploading to the App Store, Xcode usually strips it automatically. If you encounter errors, you can manually remove it using the `lipo` command:
-    ```bash
-    lipo -remove x86_64 FFmpeg.framework/FFmpeg -output FFmpeg.framework/FFmpeg
-    ```
+**App Store Compliance Advice**:
+*   Most commercial Apps **cannot** enable `--enable-gpl` (i.e., cannot integrate x264/x265).
+*   It is recommended to use the iOS system built-in `VideoToolbox` (hardware acceleration) to handle H.264/H.265, which saves power and avoids GPL issues.
+*   It is recommended to use the system `AudioToolbox` to handle AAC to avoid fdk-aac licensing issues.
 
----
-
-## 📜 License
-
-The script source code follows the MIT license.
-**Important Note**: The license of the compiled FFmpeg binary depends on the modules you enable.
-*   Enable `x264`/`x265` -> **GPL** (Requires your App to also be open source).
-*   Enable `fdk-aac` -> **Non-Free** (Incompatible with GPL, generally not distributable, limited to personal study/research or commercial licensing).
-*   Compile default FFmpeg only -> **LGPL** (Allows use in commercial Apps via dynamic linking or static linking + providing object files).
-
----
-
-## 💻 Hardware Compatibility
-
-*   **Apple Silicon (M1/M2/M3/M4/M5)**: Fully verified in this environment, supporting native compilation.
-*   **Intel Chips**: Theoretically supported but has not been fully verified in a real-world build environment yet. If you encounter issues on an Intel Mac, please feel free to provide feedback.
+This script enables GPL library support by default for learning and research purposes. **If releasing a commercial App, be sure to remove the detection or integration code for `x264` and `x265` in `build-ffmpeg.sh`.**
