@@ -31,6 +31,19 @@ echo "📦 Merging static libraries into one binary..."
 # 使用 libtool 将所有 .a 文件合并为一个大的静态库文件
 # 注意：这里假设 FFmpeg-iOS/lib 下的所有 .a 文件都是我们需要合并的
 LIB_FILES=$(find "$BUILD_DIR/lib" -name "*.a")
+
+# Include external libraries
+if [ -d "fat-x264/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-x264/lib -name "*.a")"; fi
+if [ -d "fat-x265/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-x265/lib -name "*.a")"; fi
+if [ -d "fdk-aac-ios/lib" ]; then LIB_FILES="$LIB_FILES $(find fdk-aac-ios/lib -name "*.a")"; fi
+if [ -d "fat-dav1d/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-dav1d/lib -name "*.a")"; fi
+if [ -d "fat-lame/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-lame/lib -name "*.a")"; fi
+if [ -d "fat-opus/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-opus/lib -name "*.a")"; fi
+if [ -d "fat-vpx/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-vpx/lib -name "*.a")"; fi
+if [ -d "fat-ogg/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-ogg/lib -name "*.a")"; fi
+if [ -d "fat-vorbis/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-vorbis/lib -name "*.a")"; fi
+if [ -d "fat-theora/lib" ]; then LIB_FILES="$LIB_FILES $(find fat-theora/lib -name "*.a")"; fi
+
 libtool -static -o "$FRAMEWORK_DIR/$FRAMEWORK_NAME" $LIB_FILES
 
 # 4. 拷贝头文件 (Headers)

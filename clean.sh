@@ -5,55 +5,35 @@ ITEMS_TO_CLEAN=(
     "ffmpeg-[0-9.]*"
     "FFmpeg-iOS"
     "FFmpeg-tvOS"
-    "FFmpeg-tvOS.framework"
-    "FFmpeg.framework"
+    "FFmpeg-Android"
+    "FFmpeg*.framework"
     "dav1d"
     "fat-dav1d"
-    "thin-dav1d"
-    "scratch-dav1d"
     "fdk-aac"
     "fdk-aac-ios"
     "fat-fdk-aac"
-    "thin-fdk-aac"
-    "scratch-fdk-aac"
     "x264"
     "fat-x264"
-    "thin-x264"
-    "scratch-x264"
     "x265-[0-9.]*"
     "fat-x265"
-    "thin-x265"
-    "scratch-x265"
     "lame-[0-9.]*"
     "fat-lame"
-    "thin-lame"
-    "scratch-lame"
     "libogg-[0-9.]*"
     "fat-ogg"
-    "thin-ogg"
-    "scratch-ogg"
     "opus-[0-9.]*"
     "fat-opus"
-    "thin-opus"
-    "scratch-opus"
     "libtheora-[0-9.]*"
     "fat-theora"
-    "thin-theora"
-    "scratch-theora"
     "libvorbis-[0-9.]*"
     "fat-vorbis"
-    "thin-vorbis"
-    "scratch-vorbis"
     "libvpx"
     "fat-vpx"
-    "thin-vpx"
-    "scratch-vpx"
     "pkgconfig_temp"
     "scratch"
     "thin"
+    "scratch-*"
+    "thin-*"
     "tools_bin"
-    "scratch-tvos"
-    "thin-tvos"
     "test_src"
     "test_dest"
     "dav1d-cross-*.txt"
@@ -69,14 +49,24 @@ FOUND_ITEMS=()
 
 # 查找并列出存在的项目
 for pattern in "${ITEMS_TO_CLEAN[@]}"; do
-    # 使用 find 查找匹配的项目，避免 glob 不匹配时的错误
+    # 使用 for 循环配合 find，避免 pipe 子进程导致数组变量无法传递的问题
+    # 注意：如果文件名包含空格，这种写法会有问题，但在本项目环境下是安全的
     for item in $(find . -maxdepth 1 -name "$pattern" 2>/dev/null); do
-        # 移除前面的 ./
-        clean_item="${item#./}"
-        echo "  - $clean_item"
-        FOUND_ITEMS+=("$clean_item")
+        if [ -e "$item" ]; then
+            clean_item="${item#./}"
+            echo "  - $clean_item"
+            FOUND_ITEMS+=("$clean_item")
+        fi
     done
 done
+
+# 移除重复项并排序
+if [ ${#FOUND_ITEMS[@]} -gt 0 ]; then
+    # 使用临时文件或此处这种方式进行排序去重
+    IFS=$'\n' sorted_items=($(printf "%s\n" "${FOUND_ITEMS[@]}" | sort -u))
+    unset IFS
+    FOUND_ITEMS=("${sorted_items[@]}")
+fi
 
 if [ ${#FOUND_ITEMS[@]} -eq 0 ]; then
     echo "  (No generated files found to clean)"
@@ -87,7 +77,9 @@ fi
 
 echo ""
 echo "========================================"
-read -p "Are you sure you want to delete these ${#FOUND_ITEMS[@]} items? (y/N): " -n 1 -r
+# 使用更通用的 read 方式
+printf "Are you sure you want to delete these ${#FOUND_ITEMS[@]} items? (y/N): "
+read REPLY
 echo ""
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
